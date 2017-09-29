@@ -3,7 +3,7 @@ package sqli
 import "database/sql"
 
 type DB struct {
-	sql.DB
+	*sql.DB
 }
 
 func Open(driverName, dataSourceName string) (*DB, error) {
@@ -11,8 +11,7 @@ func Open(driverName, dataSourceName string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// is it ok to deref db here?
-	return &DB{*db}, nil
+	return &DB{db}, nil
 }
 
 func (db *DB) Get(r Record, query string, args ...interface{}) error {

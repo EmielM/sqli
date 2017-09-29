@@ -11,7 +11,7 @@ import (
 )
 
 type Tx struct {
-	sql.Tx
+	*sql.Tx
 	Now      time.Time
 	Attempt  int
 	onCommit []func()
@@ -45,7 +45,8 @@ func (db *DB) Do(cb func(*Tx)) error {
 		if err != nil {
 			return err
 		}
-		tx.Tx = *tx0
+
+		tx.Tx = tx0
 
 		_, err = tx.Tx.Exec("set transaction isolation level serializable")
 		if err != nil {
@@ -110,7 +111,9 @@ func (tx *Tx) runAndCommit(cb func(*Tx)) (txErr txError) {
 	for _, f := range tx.onCommit {
 		f() // could still call tx.AbortNow() if they want to transaction to fail
 	}
+
 	txErr.err = tx.Commit()
+
 	txErr.retry = true // error on commit means we should retry
 	return
 }
@@ -158,7 +161,7 @@ func (tx *Tx) Exec(query string, args ...interface{}) sql.Result {
 // When there are zero results for the query, an empty pointer of the same pointer
 // type as r is returned, wrapped in Record.
 func (tx *Tx) Get(r Record, query string, args ...interface{}) Record {
-	err := getRecord(&tx.Tx, r, query, args...)
+	err := getRecord(tx.Tx, r, query, args...)
 	checkTxError(err)
 	if GetID(r) == 0 {
 		// special case, return nil pointer of record type for syntactic sugar:
@@ -171,7 +174,7 @@ func (tx *Tx) Get(r Record, query string, args ...interface{}) Record {
 // GetAll fetches a slice of all records returned for a query. That means no cursoring.
 // r is passed in to know the type. If r.(*User), returnValue.([]*User).
 func (tx *Tx) GetAll(r Record, query string, args ...interface{}) interface{} {
-	rs, err := getAllRecords(&tx.Tx, r, query, args...)
+	rs, err := getAllRecords(tx.Tx, r, query, args...)
 	checkTxError(err)
 	return rs
 }
@@ -182,7 +185,7 @@ func (tx *Tx) GetAll(r Record, query string, args ...interface{}) interface{} {
 // `db:"xx,nowrite"` fields are never written to the database; `db:"xx,nullempty"`
 // fields will not be written if their value looks empty (0, false, "", etc).
 func (tx *Tx) Update(record Record) {
-	err := updateRecord(&tx.Tx, record)
+	err := updateRecord(tx.Tx, record)
 	checkTxError(err)
 }
 
@@ -191,7 +194,7 @@ func (tx *Tx) Update(record Record) {
 //
 // `db:"xx,nowrite"` fields will not be written to the database.
 func (tx *Tx) Insert(record Record) {
-	err := insertRecord(&tx.Tx, record)
+	err := insertRecord(tx.Tx, record)
 	checkTxError(err)
 }
 
