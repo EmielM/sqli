@@ -130,7 +130,13 @@ func updateRecord(q queryer, record Record) error {
 }
 
 func GetID(r Record) int64 {
-	rv := reflect.ValueOf(r).Elem()
+	rv := reflect.ValueOf(r)
+	if rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return 0
+	}
 	idv := rv.FieldByNameFunc(func(name string) bool {
 		return name == "ID"
 	})

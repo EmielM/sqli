@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"time"
 
+	"math/rand"
+
 	"github.com/lib/pq"
 )
 
@@ -80,7 +82,7 @@ func (db *DB) Do(cb func(*Tx)) error {
 
 		tx.Attempt++
 		log.Print("sqli: txRetry=", tx.Attempt, " err=", txErr.err)
-		time.Sleep(time.Duration(tx.Attempt*tx.Attempt) * 50 * time.Millisecond)
+		time.Sleep(time.Duration(tx.Attempt*tx.Attempt) * time.Duration(50+rand.Intn(100)) * time.Millisecond)
 	}
 	// never reaches
 }
