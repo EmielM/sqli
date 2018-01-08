@@ -71,7 +71,6 @@ There are some things that might be improved in the future. Notably:
 - Tests
 - Have a good long look at retry semantics of postgres and see if we're retrying all possible serialization errors.
 - Support the `context` package, even though I personally don't like it. At least `db.Do` should probably have a `DoContext` variant.
-- `QueryRow` is currently not implemented because that API delays passing down the error until `Scan()`. We would need to implement a custom `sql.Result` to make it work.
 - Have a better look at (recursively) embedded structs for records. We should follow `encoding/json` semantics.
 
 # License

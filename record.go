@@ -8,13 +8,6 @@ import (
 	"strings"
 )
 
-// Queryer is implemented by both *sql.DB and *sql.Tx
-type queryer interface {
-	Query(string, ...interface{}) (*sql.Rows, error)
-	QueryRow(string, ...interface{}) *sql.Row
-	Exec(string, ...interface{}) (sql.Result, error)
-}
-
 func getRecord(q queryer, r interface{}, query string, args ...interface{}) error {
 	rt := reflect.TypeOf(r)
 	if rt.Kind() != reflect.Ptr && rt.Elem().Kind() != reflect.Struct {

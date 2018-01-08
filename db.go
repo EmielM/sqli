@@ -2,6 +2,12 @@ package sqli
 
 import "database/sql"
 
+type queryer interface {
+	Query(string, ...interface{}) (*sql.Rows, error)
+	QueryRow(string, ...interface{}) *sql.Row
+	Exec(string, ...interface{}) (sql.Result, error)
+}
+
 type DB struct {
 	*sql.DB
 }

@@ -12,8 +12,14 @@ import (
 	"github.com/lib/pq"
 )
 
+type txer interface {
+	queryer
+	Rollback() error
+	Commit() error
+}
+
 type Tx struct {
-	*sql.Tx
+	tx       txer
 	Now      time.Time
 	Attempt  int
 	onCommit []func()
@@ -33,7 +39,8 @@ func (tx *Tx) OnFail(f func(bool)) {
 	tx.onFail = append(tx.onFail, f)
 }
 
-var ErrTooMuchAttempts = errors.New("too much tx attempts")
+var ErrTooMuchAttempts = errors.New("sqli: too much tx attempts")
+var TxTrace bool
 
 func (db *DB) Do(cb func(*Tx)) error {
 	tx := &Tx{Attempt: 1}
@@ -48,11 +55,15 @@ func (db *DB) Do(cb func(*Tx)) error {
 			return err
 		}
 
-		tx.Tx = tx0
-
-		_, err = tx.Tx.Exec("set transaction isolation level serializable")
+		_, err = tx0.Exec("set transaction isolation level serializable")
 		if err != nil {
 			log.Print("sqli: could not 'set transaction isolation level serializable', ignoring err=", err)
+		}
+
+		if TxTrace {
+			tx.tx = &tracedTx{Tx: tx0}
+		} else {
+			tx.tx = tx0
 		}
 
 		tx.Now = time.Now().UTC().Truncate(time.Millisecond) // work with milliseconds
@@ -98,7 +109,7 @@ func (tx *Tx) runAndCommit(cb func(*Tx)) (txErr txError) {
 
 	defer func() {
 		if rvr := recover(); rvr != nil {
-			tx.Rollback()
+			tx.tx.Rollback()
 			if e, ok := rvr.(txError); ok {
 				txErr = e
 				return
@@ -114,7 +125,7 @@ func (tx *Tx) runAndCommit(cb func(*Tx)) (txErr txError) {
 		f() // could still call tx.AbortNow() if they want to transaction to fail
 	}
 
-	txErr.err = tx.Commit()
+	txErr.err = tx.tx.Commit()
 
 	txErr.retry = true // error on commit means we should retry
 	return
@@ -124,8 +135,14 @@ var errTxAbort = errors.New("tx abort")
 
 // AbortNow immediately stops the transaction flow (unwinds stack)
 // and cancels the transaction
-func (tx *Tx) AbortNow(err error, retry bool) {
-	panic(txError{err: err, retry: retry})
+func (tx *Tx) AbortNow(err error) {
+	panic(txError{err: err})
+}
+
+// Retry immediately stops the transaction flow (unwinds stack)
+// and schedules a tx retry.
+func (tx *Tx) RetryNow(err error) {
+	panic(txError{err: err, retry: true})
 }
 
 type txError struct {
@@ -146,15 +163,28 @@ func checkTxError(err error) {
 }
 
 func (tx *Tx) Query(query string, args ...interface{}) *sql.Rows {
-	r, err := tx.Tx.Query(query, args...)
+	r, err := tx.tx.Query(query, args...)
 	checkTxError(err)
 	return r
 }
 
 func (tx *Tx) Exec(query string, args ...interface{}) sql.Result {
-	r, err := tx.Tx.Exec(query, args...)
+	r, err := tx.tx.Exec(query, args...)
 	checkTxError(err)
 	return r
+}
+
+type Row struct {
+	row *sql.Row
+}
+
+func (r *Row) Scan(dest ...interface{}) {
+	err := r.row.Scan(dest)
+	checkTxError(err)
+}
+
+func (tx *Tx) QueryRow(query string, args ...interface{}) *Row {
+	return &Row{row: tx.tx.QueryRow(query, args...)}
 }
 
 // Get a single row from the database. r should be a pointer to a new struct that we
@@ -163,7 +193,7 @@ func (tx *Tx) Exec(query string, args ...interface{}) sql.Result {
 // When there are zero results for the query, an empty pointer of the same pointer
 // type as r is returned
 func (tx *Tx) Get(r interface{}, query string, args ...interface{}) interface{} {
-	err := getRecord(tx.Tx, r, query, args...)
+	err := getRecord(tx.tx, r, query, args...)
 	checkTxError(err)
 	if GetID(r) == 0 {
 		// special case, return nil pointer of record type for syntactic sugar:
@@ -184,7 +214,7 @@ func (tx *Tx) GetAll(rs interface{}, query string, args ...interface{}) interfac
 		// special case: invoked with new(MyType), so we can allocate the slice (and return it)
 		rs = reflect.New(reflect.SliceOf(rt)).Interface()
 	}
-	err := getAllRecords(tx.Tx, rs, query, args...)
+	err := getAllRecords(tx.tx, rs, query, args...)
 	checkTxError(err)
 	return reflect.ValueOf(rs).Elem().Interface()
 }
@@ -195,7 +225,7 @@ func (tx *Tx) GetAll(rs interface{}, query string, args ...interface{}) interfac
 // `db:"xx,nowrite"` fields are never written to the database; `db:"xx,nullempty"`
 // fields will not be written if their value looks empty (0, false, "", etc).
 func (tx *Tx) Update(r interface{}) {
-	err := updateRecord(tx.Tx, r)
+	err := updateRecord(tx.tx, r)
 	checkTxError(err)
 }
 
@@ -204,7 +234,7 @@ func (tx *Tx) Update(r interface{}) {
 //
 // `db:"xx,nowrite"` fields will not be written to the database.
 func (tx *Tx) Insert(r interface{}) {
-	err := insertRecord(tx.Tx, r)
+	err := insertRecord(tx.tx, r)
 	checkTxError(err)
 }
 
@@ -214,4 +244,11 @@ func (tx *Tx) NextSeq(seqName string) int {
 	}
 	tx.Get(&s, `:select nextval($1)`, seqName)
 	return s.NextVal
+}
+
+func (tx Tx) TraceStats() string {
+	if tt, ok := tx.tx.(*tracedTx); ok {
+		return tt.stats()
+	}
+	return ""
 }
