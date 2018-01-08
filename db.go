@@ -14,18 +14,18 @@ func Open(driverName, dataSourceName string) (*DB, error) {
 	return &DB{db}, nil
 }
 
-func (db *DB) Get(r Record, query string, args ...interface{}) error {
+func (db *DB) Get(r interface{}, query string, args ...interface{}) error {
 	return getRecord(db, r, query, args...)
 }
 
-func (db *DB) GetAll(r Record, query string, args ...interface{}) (interface{}, error) {
-	return getAllRecords(db, r, query, args...)
+func (db *DB) GetAll(rs interface{}, query string, args ...interface{}) error {
+	return getAllRecords(db, rs, query, args...)
 }
 
-func (db *DB) Update(record Record) error {
-	return updateRecord(db, record)
+func (db *DB) Update(r interface{}) error {
+	return updateRecord(db, r)
 }
 
-func (db *DB) Insert(record Record) error {
-	return insertRecord(db, record)
+func (db *DB) Insert(r interface{}) error {
+	return insertRecord(db, r)
 }

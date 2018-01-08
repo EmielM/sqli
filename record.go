@@ -2,26 +2,25 @@ package sqli
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
 
-// Record should be a pointer to a struct with an "ID" field (in itself or any embedded structs)
-// type MyRecord struct {
-//     ID int `db:"id"`
-//     someField string `db:"some_field"`
-// }
-type Record interface{}
-
-// queryer is implemented by both *sql.DB and *sql.Tx
+// Queryer is implemented by both *sql.DB and *sql.Tx
 type queryer interface {
 	Query(string, ...interface{}) (*sql.Rows, error)
 	QueryRow(string, ...interface{}) *sql.Row
 	Exec(string, ...interface{}) (sql.Result, error)
 }
 
-func getRecord(q queryer, r Record, query string, args ...interface{}) error {
+func getRecord(q queryer, r interface{}, query string, args ...interface{}) error {
+	rt := reflect.TypeOf(r)
+	if rt.Kind() != reflect.Ptr && rt.Elem().Kind() != reflect.Struct {
+		return errors.New("sqli: Get needs a pointer to a struct: *User")
+	}
+
 	rows, err := selectQuery(q, GetTable(r), query, args)
 	if err != nil {
 		return err
@@ -40,25 +39,32 @@ func getRecord(q queryer, r Record, query string, args ...interface{}) error {
 	return nil
 }
 
-func getAllRecords(q queryer, r Record, query string, args ...interface{}) (interface{}, error) {
-	rows, err := selectQuery(q, GetTable(r), query, args)
+func getAllRecords(q queryer, rs interface{}, query string, args ...interface{}) error {
+	rt := reflect.TypeOf(rs) // *[]*MyType
+	if rt.Kind() != reflect.Ptr || rt.Elem().Kind() != reflect.Slice || rt.Elem().Elem().Kind() != reflect.Ptr || rt.Elem().Elem().Elem().Kind() != reflect.Struct {
+		return errors.New("sqli: GetAll needs a pointer to a slice: *[]*MyType")
+	}
+
+	rt = rt.Elem().Elem() // *MyType
+
+	rows, err := selectQuery(q, GetTable(reflect.New(rt.Elem()).Interface()), query, args)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	rt := reflect.TypeOf(r) // *User
-	rsv := reflect.MakeSlice(reflect.SliceOf(rt), 0, 0)
+	sv := reflect.MakeSlice(reflect.SliceOf(rt), 0, 0)
 
 	for rows.Next() {
-		r := reflect.New(rt.Elem())
-		err = Hydrate(r.Interface(), rows)
+		rv := reflect.New(rt.Elem())
+		err = Hydrate(rv.Interface(), rows)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		rsv = reflect.Append(rsv, r)
+		sv = reflect.Append(sv, rv)
 	}
-	return rsv.Interface(), nil
+	reflect.ValueOf(rs).Elem().Set(sv)
+	return nil
 }
 
 func isEmpty(v reflect.Value) bool {
@@ -77,14 +83,19 @@ func isEmpty(v reflect.Value) bool {
 	}
 }
 
-func insertRecord(q queryer, record Record) error {
-	table := GetTable(record)
+func insertRecord(q queryer, r interface{}) error {
+	rt := reflect.TypeOf(r)
+	if rt.Kind() != reflect.Ptr || rt.Elem().Kind() != reflect.Struct {
+		return errors.New("sqli: Insert needs a pointer to a struct: *MyType")
+	}
+
+	table := GetTable(r)
 
 	fields := []string{}
 	exprs := []string{}
 	args := []interface{}{}
 	i := 1
-	walkTags(record, func(field string, flags tagFlags, value reflect.Value) {
+	walkTags(r, func(field string, flags tagFlags, value reflect.Value) {
 		nullEmpty := flags.NullEmpty || value.Kind() == reflect.Ptr
 		if flags.NoWrite || (nullEmpty && isEmpty(value)) {
 			return
@@ -102,14 +113,19 @@ func insertRecord(q queryer, record Record) error {
 	}
 	defer rows.Close()
 	rows.Next() // assert: returns true
-	return Hydrate(record, rows)
+	return Hydrate(r, rows)
 }
 
-func updateRecord(q queryer, record Record) error {
+func updateRecord(q queryer, r interface{}) error {
+	rt := reflect.TypeOf(r)
+	if rt.Kind() != reflect.Ptr || rt.Elem().Kind() != reflect.Struct {
+		return errors.New("sqli: Update needs a pointer to a struct: *MyType")
+	}
+
 	exprs := []string{}
-	args := []interface{}{GetID(record)}
+	args := []interface{}{GetID(r)}
 	i := 2
-	walkTags(record, func(field string, flags tagFlags, value reflect.Value) {
+	walkTags(r, func(field string, flags tagFlags, value reflect.Value) {
 		if flags.NoWrite {
 			return
 		}
@@ -118,18 +134,18 @@ func updateRecord(q queryer, record Record) error {
 		i++
 	})
 	rows, err := q.Query(fmt.Sprintf(`update "%s" set %s where id=$1 returning *`,
-		GetTable(record), strings.Join(exprs, ", ")), args...)
+		GetTable(r), strings.Join(exprs, ", ")), args...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return fmt.Errorf("update failed, did you mean to insert instead? record=%s", GetPKString(record))
+		return fmt.Errorf("sqli: update failed, did you mean to insert instead? record=%s", GetPKString(r))
 	}
-	return Hydrate(record, rows)
+	return Hydrate(r, rows)
 }
 
-func GetID(r Record) int64 {
+func GetID(r interface{}) int64 {
 	rv := reflect.ValueOf(r)
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
@@ -149,22 +165,29 @@ func GetID(r Record) int64 {
 
 var tableNames = map[reflect.Type]string{}
 
-func SetTableName(r Record, tableName string) {
-	tableNames[reflect.TypeOf(r).Elem()] = tableName
+func SetTableName(r interface{}, tableName string) {
+	rt := reflect.TypeOf(r)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
+	tableNames[rt] = tableName
 }
 
-func GetTable(r Record) string {
-	t := reflect.TypeOf(r)
-	// assert t.Kind() == reflect.Ptr
-	t = t.Elem()
-	// assert t.Kind() == reflect.Struct
-	if n, _ := tableNames[t]; n != "" {
+func GetTable(r interface{}) string {
+	rt := reflect.TypeOf(r)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
+	if n, _ := tableNames[rt]; n != "" {
 		return n
 	}
-	return strings.ToLower(t.Name()) + "s"
+	if rt.Kind() == reflect.Struct {
+		return strings.ToLower(rt.Name()) + "s"
+	}
+	return ""
 }
 
-func GetPKString(r Record) string {
+func GetPKString(r interface{}) string {
 	return fmt.Sprintf("%s:%d", GetTable(r), GetID(r))
 }
 
@@ -192,10 +215,10 @@ func stringInSlice(slice []string, needle string) bool {
 	return false
 }
 
-func walkTags(record interface{}, cb func(string, tagFlags, reflect.Value)) {
-	// record should be pointer type: *MyRecord
+func walkTags(r interface{}, cb func(string, tagFlags, reflect.Value)) {
+	// r should be pointer type: *MyRecord
 
-	v := reflect.ValueOf(record).Elem()
+	v := reflect.ValueOf(r).Elem()
 	t := v.Type()
 
 	for i := 0; i < t.NumField(); i++ {
@@ -218,7 +241,12 @@ func walkTags(record interface{}, cb func(string, tagFlags, reflect.Value)) {
 var hydrateToVoid interface{}
 
 // Hydrate reads the next record in rows into struct Record
-func Hydrate(record Record, rows *sql.Rows) error {
+func Hydrate(r interface{}, rows *sql.Rows) error {
+
+	rt := reflect.TypeOf(r)
+	if rt.Kind() != reflect.Ptr || rt.Elem().Kind() != reflect.Struct {
+		return errors.New("sqli: Hydrate needs a pointer to a struct: *MyType")
+	}
 
 	columns, err := rows.Columns()
 	if err != nil {
@@ -226,7 +254,7 @@ func Hydrate(record Record, rows *sql.Rows) error {
 	}
 
 	values := make(map[string]interface{})
-	walkTags(record, func(field string, flags tagFlags, value reflect.Value) {
+	walkTags(r, func(field string, flags tagFlags, value reflect.Value) {
 		values[field] = value.Addr().Interface() // pointer to the field
 	})
 

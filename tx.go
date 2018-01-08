@@ -161,8 +161,8 @@ func (tx *Tx) Exec(query string, args ...interface{}) sql.Result {
 // will populate when the query matches. query should be the part in sql query after
 // where `, or should be prefixed with `:`.
 // When there are zero results for the query, an empty pointer of the same pointer
-// type as r is returned, wrapped in Record.
-func (tx *Tx) Get(r Record, query string, args ...interface{}) Record {
+// type as r is returned
+func (tx *Tx) Get(r interface{}, query string, args ...interface{}) interface{} {
 	err := getRecord(tx.Tx, r, query, args...)
 	checkTxError(err)
 	if GetID(r) == 0 {
@@ -173,12 +173,20 @@ func (tx *Tx) Get(r Record, query string, args ...interface{}) Record {
 	return r
 }
 
-// GetAll fetches a slice of all records returned for a query. That means no cursoring.
-// r is passed in to know the type. If r.(*User), returnValue.([]*User).
-func (tx *Tx) GetAll(r Record, query string, args ...interface{}) interface{} {
-	rs, err := getAllRecords(tx.Tx, r, query, args...)
+// GetAll fetches a slice of all records returned for a query into rs.
+// rs should be a pointer to a slice that we'll fill and update like db.GetAll.
+// GetAll returns the unpointed slice.
+// As a special case, rs could be a pointer to a record type only to indicate type.
+// GetAll will then allocate the slice and you should use the return value.
+func (tx *Tx) GetAll(rs interface{}, query string, args ...interface{}) interface{} {
+	rt := reflect.TypeOf(rs)
+	if rt.Kind() == reflect.Ptr && rt.Elem().Kind() == reflect.Struct {
+		// special case: invoked with new(MyType), so we can allocate the slice (and return it)
+		rs = reflect.New(reflect.SliceOf(rt)).Interface()
+	}
+	err := getAllRecords(tx.Tx, rs, query, args...)
 	checkTxError(err)
-	return rs
+	return reflect.ValueOf(rs).Elem().Interface()
 }
 
 // Update a record that should exist in the database. The updated record is
@@ -186,8 +194,8 @@ func (tx *Tx) GetAll(r Record, query string, args ...interface{}) interface{} {
 //
 // `db:"xx,nowrite"` fields are never written to the database; `db:"xx,nullempty"`
 // fields will not be written if their value looks empty (0, false, "", etc).
-func (tx *Tx) Update(record Record) {
-	err := updateRecord(tx.Tx, record)
+func (tx *Tx) Update(r interface{}) {
+	err := updateRecord(tx.Tx, r)
 	checkTxError(err)
 }
 
@@ -195,8 +203,8 @@ func (tx *Tx) Update(record Record) {
 // the struct (using `insert ... returning *`).
 //
 // `db:"xx,nowrite"` fields will not be written to the database.
-func (tx *Tx) Insert(record Record) {
-	err := insertRecord(tx.Tx, record)
+func (tx *Tx) Insert(r interface{}) {
+	err := insertRecord(tx.Tx, r)
 	checkTxError(err)
 }
 
