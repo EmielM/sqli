@@ -60,10 +60,9 @@ func (db *DB) Do(cb func(*Tx)) error {
 			log.Print("sqli: could not 'set transaction isolation level serializable', ignoring err=", err)
 		}
 
+		tx.tx = tx0
 		if TxTrace {
-			tx.tx = &tracedTx{Tx: tx0}
-		} else {
-			tx.tx = tx0
+			tx.tx = &tracedTx{tx: tx.tx}
 		}
 
 		tx.Now = time.Now().UTC().Truncate(time.Millisecond) // work with milliseconds
