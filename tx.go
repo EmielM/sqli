@@ -55,9 +55,9 @@ func (db *DB) Do(cb func(*Tx)) error {
 			return err
 		}
 
-		_, err = tx0.Exec("set transaction isolation level serializable")
+		_, err = tx0.Exec("set transaction isolation level repeatable read")
 		if err != nil {
-			log.Print("sqli: could not 'set transaction isolation level serializable', ignoring err=", err)
+			log.Print("sqli: could not 'set transaction isolation repeatable read', ignoring err=", err)
 		}
 
 		tx.tx = tx0
