@@ -52,7 +52,11 @@ func (tx *tracedTx) trace(query string, args ...interface{}) func() {
 	query = traceParamsRE.ReplaceAllStringFunc(query, func(m string) string {
 		i, _ := strconv.Atoi(m[1:])
 		if i > 0 && i <= len(args) {
-			return fmt.Sprintf("%s:%#v", m, args[i-1])
+			a := args[i-1]
+			if b, ok := a.([]byte); ok {
+				a = string(b)
+			}
+			return fmt.Sprintf("%s:%#v", m, a)
 		}
 		return m
 	})

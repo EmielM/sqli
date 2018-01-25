@@ -57,7 +57,7 @@ func (db *DB) Do(cb func(*Tx)) error {
 
 		_, err = tx0.Exec("set transaction isolation level repeatable read")
 		if err != nil {
-			log.Print("sqli: could not 'set transaction isolation repeatable read', ignoring err=", err)
+			log.Print("sqli: could not 'set transaction isolation level repeatable read', ignoring err=", err)
 		}
 
 		tx.tx = tx0
@@ -178,7 +178,7 @@ type Row struct {
 }
 
 func (r *Row) Scan(dest ...interface{}) {
-	err := r.row.Scan(dest)
+	err := r.row.Scan(dest...)
 	checkTxError(err)
 }
 
